@@ -1,0 +1,305 @@
+#!/bin/bash
+
+
+#------------ssh key configuration ------------ :
+ssh-keygen -t rsa -P ""
+cat id_rsa.pub >> .ssh/authorized_keys
+scp -r -p /home/ubuntu/.ssh/id_rsa.pub ubuntu@slave01:/home/ubuntu/.ssh/
+scp -r -p /home/ubuntu/.ssh/id_rsa.pub ubuntu@slave02:/home/ubuntu/.ssh/
+scp -r -p /home/ubuntu/.ssh/id_rsa.pub ubuntu@slave03:/home/ubuntu/.ssh/
+
+
+#------------Spark part------------
+
+#Download the spark zip
+wget https://www-eu.apache.org/dist/spark/spark-2.4.4/spark-2.4.4-bin-hadoop2.7.tgz
+
+#fill hosts with appropriate ip adresses (manuellement)
+#connect as root
+sudo -s
+#sudo nano /etc/hosts
+cat <<EOT >> /etc/hosts
+159.100.245.110 master
+89.145.161.131 slave01
+159.100.242.215 slave02
+89.145.161.168 slave03
+EOT
+exit
+
+
+#install java 8,scala and openssh
+sudo apt install openjdk-8-jre-headless
+sudo apt-get install scala
+sudo apt-get install openssh-server openssh-client
+
+#spark extraction
+tar xzf spark-2.4.4-bin-hadoop2.7.tgz
+
+#/usr/lib/jvm/java-8-openjdk-amd64
+#fill .bashrc
+#/bin à enlever
+cat <<EOT >> ~/.bashrc
+export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+export SPARK_HOME=/home/ubuntu/spark-2.4.4-bin-hadoop2.7
+export PATH=$PATH:/home/ubuntu/spark-2.4.4-bin-hadoop2.7/bin:/usr/lib/jvm/java-8-openjdk-amd64/bin
+export PATH=$PATH:/home/ubuntu/spark-2.4.4-bin-hadoop2.7/sbin
+EOT
+source .bashrc
+
+
+#fill spark-env
+cp spark-2.4.4-bin-hadoop2.7/conf/spark-env.sh.template spark-2.4.4-bin-hadoop2.7/conf/spark-env.sh
+cat <<EOT >> spark-2.4.4-bin-hadoop2.7/conf/spark-env.sh
+export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+EOT
+
+#ajouter au master(spark-env)
+#SPARK_MASTER_HOST='194.182.180.214'
+#SPARK_LOCAL_IP='194.182.180.214' 
+
+
+#fill slaves file
+cp spark-2.4.4-bin-hadoop2.7/conf/slaves.template spark-2.4.4-bin-hadoop2.7/conf/slaves
+echo 'slave01' > spark-2.4.4-bin-hadoop2.7/conf/slaves
+cat <<EOT >> spark-2.4.4-bin-hadoop2.7/conf/slaves
+slave02
+slave03
+EOT
+
+#copy configured spark to slaves
+tar czf spark.tar.gz spark-2.4.4-bin-hadoop2.7
+scp spark.tar.gz slave01:~
+scp spark.tar.gz slave02:~
+scp spark.tar.gz slave03:~
+
+
+#------------Hadoop part------------
+
+#download hadoop and untar
+wget https://www.apache.org/dist/hadoop/core/hadoop-2.7.7/hadoop-2.7.7.tar.gz
+tar -xzf hadoop-2.7.7.tar.gz
+
+#fill .bashrc:
+cat <<EOT >> .bashrc
+export HADOOP_HOME=/home/ubuntu/hadoop-2.7.7
+export HADOOP_INSTALL=/home/ubuntu/hadoop-2.7.7
+export HADOOP_MAPRED_HOME=/home/ubuntu/hadoop-2.7.7
+export HADOOP_COMMON_HOME=/home/ubuntu/hadoop-2.7.7
+export HADOOP_HDFS_HOME=/home/ubuntu/hadoop-2.7.7
+export YARN_HOME=/home/ubuntu/hadoop-2.7.7
+export HADOOP_COMMON_LIB_NATIVE_DIR=/home/ubuntu/hadoop-2.7.7/lib/native
+export PATH=$PATH:/home/ubuntu/hadoop-2.7.7/sbin:/home/ubuntu/hadoop-2.7.7/bin
+EOT
+source .bashrc
+
+#fill hadoop-env.sh
+echo 'export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64' >> hadoop-2.7.7/etc/hadoop/hadoop-env.sh
+
+#fill hadoop-2.7.7/etc/hadoop/hdfs-site.xml	
+echo '<?xml version="1.0" encoding="UTF-8"?>' > hadoop-2.7.7/etc/hadoop/hdfs-site.xml
+cat <<EOT >> hadoop-2.7.7/etc/hadoop/hdfs-site.xml
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<configuration>
+<property>
+<name>dfs.replication</name>
+<value>3</value>
+</property>
+<property>
+<name>dfs.name.dir</name>
+<value>file:///home/ubuntu/hadoop-2.7.7/data/hdfs/namenode</value>
+</property>
+<property>
+<name>dfs.data.dir</name>
+<value>file:///home/ubuntu/hadoop-2.7.7/data/hdfs/datanode</value>
+</property>
+</configuration>
+EOT
+
+
+#fill hadoop-2.7.7/etc/hadoop/core-site.xml
+echo '<?xml version="1.0" encoding="UTF-8"?>' > hadoop-2.7.7/etc/hadoop/core-site.xml
+cat <<EOT >> hadoop-2.7.7/etc/hadoop/core-site.xml
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<configuration>
+<property>
+<name>fs.default.name</name>
+<value>hdfs://194.182.166.27:9000</value>
+</property>
+</configuration>
+EOT
+
+#fill hadoop-2.7.7/etc/hadoop/mapred-site.xml
+cp hadoop-2.7.7/etc/hadoop/mapred-site.xml.template hadoop-2.7.7/etc/hadoop/mapred-site.xml
+echo '<?xml version="1.0" encoding="UTF-8"?>' > hadoop-2.7.7/etc/hadoop/mapred-site.xml
+cat <<EOT >> hadoop-2.7.7/etc/hadoop/mapred-site.xml
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<configuration>
+<property>
+<name>mapreduce.framework.name</name>
+<value>yarn</value>
+</property>
+</configuration>
+EOT
+
+
+#fill hadoop-2.7.7/etc/hadoop/yarn-site.xml
+echo '<?xml version="1.0" encoding="UTF-8"?>' > hadoop-2.7.7/etc/hadoop/yarn-site.xml
+cat <<EOT >> hadoop-2.7.7/etc/hadoop/yarn-site.xml
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<configuration>
+<property>
+<name>yarn.nodemanager.aux-services</name>
+<value>mapreduce_shuffle</value>
+</property>
+<property>
+<name>yarn.nodemanager.aux-services.mapreduce.shuffle.class</name>
+<value> org.apache.hadoop.mapred.ShuffleHandler</value>
+</property>
+<property>
+<name>yarn.resourcemanager.hostname</name>
+<value>master</value>
+</property>
+</configuration>
+EOT
+
+#fill hadoop-2.7.7/etc/hadoop/slaves
+echo 'Slave001' > hadoop-2.7.7/etc/hadoop/slaves
+cat <<EOT >> hadoop-2.7.7/etc/hadoop/slaves
+Slave002
+Slave003
+EOT
+
+
+#copy configured hadoop to slaves
+tar czf hadoop.tar.gz hadoop-2.7.7
+scp hadoop.tar.gz slave01:~
+scp hadoop.tar.gz slave02:~
+scp hadoop.tar.gz slave03:~
+
+
+#format the namenode
+hdfs namenode -format
+
+
+
+
+#------Hbase part------------
+
+#download hbase and untar it
+wget https://archive.apache.org/dist/hbase/1.4.9/hbase-1.4.9-bin.tar.gz
+tar -xzf hbase-1.4.9-bin.tar.gz
+
+#fill .bashrc
+cat <<EOT >> .bashrc
+export HBASE_HOME=/home/ubuntu/hbase-1.4.9
+export PATH=/home/ubuntu/hbase-1.4.9/bin:$PATH
+EOT
+source .bashrc
+
+#fill /home/ubuntu/hbase-1.4.9/conf/hbase-env.sh
+cat <<EOT >> /home/ubuntu/hbase-1.4.9/conf/hbase-env.sh
+export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+export HBASE_MANAGES_ZK=true
+export HBASE_PID_DIR=/home/ubuntu/hadoop-2.7.7/pids
+EOT
+
+#fill /home/ubuntu/hbase-1.4.9/conf/hbase-site.xml
+echo '<?xml version="1.0" encoding="UTF-8"?>' > /home/ubuntu/hbase-1.4.9/conf/hbase-site.xml
+cat <<EOT >> /home/ubuntu/hbase-1.4.9/conf/hbase-site.xml
+<?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+<configuration>
+<property>
+<name>hbase.rootdir</name>
+<value>hdfs://194.182.166.27:9000/hbase</value>
+</property>
+<property>
+<name>hbase.cluster.distributed</name>
+<value>true</value>
+</property>
+<property>
+<name>hbase.zookeeper.property.dataDir</name>
+<value>hdfs://194.182.166.27:9000/zookeeper</value>
+</property>
+<property>
+<name>hbase.zookeeper.quorum</name>
+<value>159.100.247.154,159.100.246.12,159.100.254.230,159.100.254.198</value>
+</property>
+<property>
+<name>hbase.zookeeper.property.clientPort</name>
+<value>2222</value>
+</property>
+</configuration>
+EOT
+
+
+#fill /home/ubuntu/hbase-1.4.9/conf/hbase-site.xml
+cat <<EOT >> /home/ubuntu/hbase-1.4.9/conf/regionservers
+Slave001
+Slave002
+Slave003
+EOT
+
+
+#---------ELK-part----------------
+#Download and install elastic
+wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add -
+echo "deb https://artifacts.elastic.co/packages/6.x/apt stable main" | sudo tee -a /etc/apt/sources.list.d/elastic-6.x.list
+sudo apt update
+sudo apt-get install elasticsearch
+
+#connect as root
+sudo -s
+
+
+#configure /etc/elasticsearch/elasticsearch.yml
+cat <<EOT >> /etc/elasticsearch/elasticsearch.yml
+cluster.name: poc
+node.name: master
+network.host: 194.182.166.27
+discovery.zen.ping.unicast.hosts: ["194.182.166.27" ,"89.145.160.130" ,"89.145.166.180" ,"89.145.160.216"]
+node.master: true
+http.port: 9200
+EOT
+
+#sudo ufw allow 9200
+#sudo ufw allow 9300
+
+#---------kibana---------------
+#install kibana
+sudo apt-get install kibana
+
+#fill kibana.yml
+cat <<EOT >> /etc/kibana/kibana.yml
+server.host: 194.182.166.27
+elasticsearch.hosts: ["http://194.182.166.27:9200"]
+EOT
+
+
+#---------logstash---------------
+#install logstash
+sudo apt-get install logstash #7.0 version
+
+#fill logstash.yml
+cat <<EOT >> /etc/logstash/logstash.yml
+node.name:master
+EOT
+
+exit
+
+sudo systemctl enable elasticsearch.service
+sudo systemctl start elasticsearch.service
+sudo systemctl enable kibana.service
+sudo systemctl start kibana.service
+
+
+sudo apt-get --purge autoremove elasticsearch
+sudo apt-get --purge autoremove kibana
+sudo apt-get --purge autoremove logstash
+sudo apt-get install elasticsearch
+sudo apt-get install kibana
+sudo apt-get install logstash
+
+
+sudo apt-get install ubuntu-desktop
+
+

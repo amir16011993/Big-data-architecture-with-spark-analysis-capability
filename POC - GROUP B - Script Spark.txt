@@ -1,0 +1,75 @@
+#!/usr/bin/python
+from pyspark import SparkContext, SparkConf
+from pyspark.sql import SQLContext
+from pyspark.sql.functions import unix_timestamp
+from datetime import datetime
+from pyspark.sql.functions import unix_timestamp, from_unixtime
+from pyspark.sql.functions import pow, col, hour,minute,second
+import numpy as np
+if __name__ == "__main__":
+
+	#Set es-hadoop config
+	conf = SparkConf().setAppName("ReadToES")
+	sc = SparkContext(conf=conf)
+	sqlContext = SQLContext(sc)
+	conf = {"es.resource" : "tunisia", "es.query" : "?q=*"}
+	rdd = sc.newAPIHadoopRDD("org.elasticsearch.hadoop.mr.EsInputFormat", "org.apache.hadoop.io.NullWritable", "org.elasticsearch.hadoop.mr.LinkedMapWritable", conf=conf)
+	
+	#Clean data from NaN values and create dataframe
+	es_df = sqlContext.read.format("org.elasticsearch.spark.sql").load("tunisia")
+	df = es_df.toPandas()
+	df = df.dropna()
+	es_df = sqlContext.createDataFrame(df)
+
+	#Convert timestamp to date (firstSeen)
+	es_df.registerTempTable("temp")
+	es_df= sqlContext.sql("SELECT *, cast(firstSeen as Timestamp) as firstSeenNEW FROM temp d")
+	es_df=es_df.drop('firstSeen')
+	es_df=es_df.withColumn('firstSeen',from_unixtime(unix_timestamp("firstSeenNEW", "yyyy-MM-dd HH:mm:ss.SSS")))
+	es_df=es_df.drop('firstSeenNEW')
+
+	#Convert timestamp to date (lastSeen)
+	es_df.registerTempTable("temp1")
+	es_df= sqlContext.sql("SELECT *, cast(lastSeen as Timestamp) as lastSeenNEW FROM temp1 d")
+	es_df=es_df.drop('lastSeen')
+	es_df=es_df.withColumn('lastSeen',from_unixtime(unix_timestamp("lastSeenNEW", "yyyy-MM-dd HH:mm:ss.SSS")))
+	es_df=es_df.drop('lastSeenNEW')
+	
+	#Calculate distance (departure, arrival) and score
+	es_df=es_df.withColumn("departDistance", pow(pow(col("estDepartureAirportHorizDistance"),2)+pow(col("estDepartureAirportVertDistance"),2),0.5))
+	es_df=es_df.withColumn("arrivalDistance", pow(pow(col("estArrivalAirportHorizDistance"),2)+pow(col("estArrivalAirportVertDistance"),2),0.5))
+	es_df=es_df.withColumn("flightProgress", (col("departDistance")/(col("departDistance")+col("arrivalDistance")))*100)
+
+	#calculate duration of flight and elapsed time
+	es_df=es_df.withColumn("flightDuration", (second(col("lastSeen"))-second(col("firstSeen")))/3600+(minute(col("lastSeen"))-minute(col("firstSeen")))/60 +  (hour(col("lastSeen"))-hour(col("firstSeen"))) )
+	es_df=es_df.withColumn("elapsedTime", col("flightDuration") * (col("flightProgress")*0.01))	
+
+	#Calculate average departure speed and time left and theorical distance
+	es_df=es_df.withColumn("departureAverageSpeed", col("departDistance")/col("elapsedTime"))	
+	es_df=es_df.withColumn("timeLeft", col("flightDuration") - col("elapsedTime"))
+	es_df=es_df.withColumn("theoricalDistanceLeft", col("departureAverageSpeed")*col("timeLeft"))
+	
+	#Calculate punctuality_score and recommended average speed
+	es_df=es_df.withColumn("punctualityScore", col("theoricalDistanceLeft")/col("arrivalDistance"))
+	es_df=es_df.withColumn("recommendedAverageSpeed", col("arrivalDistance")/col("timeLeft"))
+
+	rdd1 = es_df.rdd.map(es_df)
+	#flightProgress (sort (descending))
+	fSorted = rdd1.sortBy(lambda a: a[12],ascending= False)
+	print(fSorted.take(10))
+	#punctuality score (sort (descending))
+	pSorted = rdd1.sortBy(lambda a: a[18],ascending= False)
+	print(pSorted.take(10))
+	#icao24 (group by)(count)
+	icao=rdd1.groupByKey(lambda a: a[1]).mapValues(lambda vals: len(set(vals)))
+	print(icao.take(10))
+	
+	
+	#Show data
+	#es_df.show(40)
+	# Query with the index
+	es_df.registerTempTable("temp3")
+	tail = sqlContext.sql("""SELECT * FROM temp3 WHERE estArrivalAirport='DTTA' limit 50""")
+	tail.show()
+	
+	
